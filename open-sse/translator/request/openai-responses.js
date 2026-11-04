@@ -315,6 +315,53 @@ function buildReasoningInputItem(msg) {
   return item;
 }
 
+function inputContainsJsonKeyword(input) {
+  if (!Array.isArray(input)) return false;
+  for (const item of input) {
+    if (typeof item?.content === "string" && /json/i.test(item.content)) return true;
+    if (Array.isArray(item?.content)) {
+      for (const part of item.content) {
+        if (typeof part?.text === "string" && /json/i.test(part.text)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// OpenAI Responses API rejects text.format.type="json_object" unless `input`
+// messages contain the word "json" (it does not check `instructions`, where
+// Chat Completions system messages are moved). Ensure `input` satisfies this.
+function ensureJsonKeywordInResponsesInput(result) {
+  if (result?.text?.format?.type !== "json_object" || !Array.isArray(result.input)) return;
+  if (inputContainsJsonKeyword(result.input)) return;
+
+  for (let i = result.input.length - 1; i >= 0; i--) {
+    const item = result.input[i];
+    if (item?.role === ROLE.USER) {
+      if (typeof item.content === "string") {
+        item.content = `${item.content}\nRespond in JSON.`;
+        return;
+      }
+      if (Array.isArray(item.content)) {
+        for (let j = item.content.length - 1; j >= 0; j--) {
+          if (typeof item.content[j]?.text === "string") {
+            item.content[j] = { ...item.content[j], text: `${item.content[j].text}\nRespond in JSON.` };
+            return;
+          }
+        }
+        item.content.push({ type: RESPONSES_ITEM.INPUT_TEXT, text: "Respond in JSON." });
+        return;
+      }
+    }
+  }
+
+  result.input.push({
+    type: RESPONSES_ITEM.MESSAGE,
+    role: ROLE.USER,
+    content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "Respond in JSON." }],
+  });
+}
+
 function mapResponsesText(result, body) {
   if (body.text !== undefined) result.text = { ...body.text };
   if (body.response_format && !result.text?.format) {
@@ -325,6 +372,7 @@ function mapResponsesText(result, body) {
     };
   }
   delete result.response_format;
+  ensureJsonKeywordInResponsesInput(result);
 }
 
 /**

@@ -633,9 +633,9 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     return null;
   }
 
-  // Response completed
-  if (eventType === "response.completed" || eventType === "response.done") {
-    // Extract usage from response.completed event
+  // Response completed or incomplete (e.g. max_output_tokens exhausted during reasoning)
+  if (eventType === "response.completed" || eventType === "response.done" || eventType === "response.incomplete") {
+    // Extract usage from response.completed / response.incomplete event
     const responseUsage = data.response?.usage;
     if (responseUsage && typeof responseUsage === "object") {
       const inputTokens = responseUsage.input_tokens || responseUsage.prompt_tokens || 0;
@@ -643,12 +643,14 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
       // OpenAI Responses API: input_tokens already includes cached_tokens
       // Cache info is in input_tokens_details.cached_tokens
       const cacheReadTokens = responseUsage.input_tokens_details?.cached_tokens || responseUsage.cache_read_input_tokens || 0;
+      const reasoningTokens = responseUsage.output_tokens_details?.reasoning_tokens || responseUsage.completion_tokens_details?.reasoning_tokens || 0;
       
-      state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens });
+      state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens, reasoningTokens });
     }
     
     if (!state.finishReasonSent) {
-      const finishReason = computeFinishReason(state);
+      const isIncomplete = eventType === "response.incomplete" || data.response?.status === "incomplete";
+      const finishReason = isIncomplete ? OPENAI_FINISH.LENGTH : computeFinishReason(state);
 
       state.finishReasonSent = true;
       state.finishReason = finishReason; // Mark for usage injection in stream.js

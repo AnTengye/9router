@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import "./registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+import { openaiResponsesToOpenAIResponse } from "../../open-sse/translator/response/openai-responses.js";
 
 const MODEL = "gpt-6.1-sol";
 const PROVIDER = "openai-compatible-responses-contract-test";
@@ -116,5 +117,43 @@ describe("OpenAI Responses upstream request contract", () => {
     const out = translate(chat({ text, response_format: { type: "text" } }));
 
     expect(out.text).toEqual(text);
+  });
+
+  it("ensures input contains the word 'json' when system message moved to instructions under json_object format", () => {
+    const out = translate(chat({
+      messages: [
+        { role: "system", content: "Return strict JSON." },
+        { role: "user", content: "Review this code diff." },
+      ],
+      response_format: { type: "json_object" },
+    }));
+
+    expect(out.instructions).toBe("Return strict JSON.");
+    expect(out.input[0].content[0].text).toMatch(/json/i);
+  });
+
+  it("maps response.incomplete to finish_reason=length and preserves usage with reasoning_tokens", () => {
+    const state = { model: MODEL };
+    const chunk = openaiResponsesToOpenAIResponse({
+      type: "response.incomplete",
+      response: {
+        id: "resp_123",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 8000,
+          output_tokens: 12288,
+          output_tokens_details: { reasoning_tokens: 12288 },
+        },
+      },
+    }, state);
+
+    expect(chunk.choices[0].finish_reason).toBe("length");
+    expect(chunk.usage).toEqual({
+      prompt_tokens: 8000,
+      completion_tokens: 12288,
+      total_tokens: 20288,
+      completion_tokens_details: { reasoning_tokens: 12288 },
+    });
   });
 });
