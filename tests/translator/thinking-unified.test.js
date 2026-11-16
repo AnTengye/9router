@@ -339,9 +339,9 @@ describe("transport-declared thinkingFormat (Responses endpoints)", () => {
     expect(out.reasoning).toBeUndefined();
   });
 
-  it("opencode-go /responses expresses 'none' by omitting reasoning", () => {
+  it("opencode-go /responses expresses 'none' with nested reasoning effort none", () => {
     const out = apply("openai-responses", "deepseek-v4.1-flash", responsesBody("none"), "opencode-go");
-    expect(out.reasoning).toBeUndefined();
+    expect(out.reasoning).toEqual({ effort: "none" });
     expect(out.reasoning_effort).toBeUndefined();
     expect(out.thinking).toBeUndefined();
   });
@@ -352,8 +352,9 @@ describe("transport-declared thinkingFormat (Responses endpoints)", () => {
     expect(out.reasoning_effort).toBeUndefined();
   });
 
-  it("a provider without the declaration keeps its existing Responses behaviour (control)", () => {
+  it("a provider without the declaration also uses nested reasoning on Responses", () => {
     const out = apply("openai-responses", "oc/space-bunny-free", chatBody("high"), "oc");
-    expect(out.reasoning_effort).toBe("high");
+    expect(out.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(out.reasoning_effort).toBeUndefined();
   });
 });

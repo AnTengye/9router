@@ -201,12 +201,12 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
     expect(body.reasoning.context).toBe("all_turns");
   });
 
-  it("maps GPT-6.1 Sol's Codex-only ultra effort to max", () => {
+  it("preserves GPT-6.1 Sol's ultra effort", () => {
     const body = new CodexExecutor().transformRequest("gpt-6.1-sol", {
       model: "gpt-6.1-sol", input: "hello", reasoning: { effort: "ultra" },
     }, true, credentials);
 
-    expect(body.reasoning).toEqual({ effort: "max", context: "all_turns" });
+    expect(body.reasoning).toEqual({ effort: "ultra", context: "all_turns" });
   });
 
   it("sends the Lite shape and header in the actual outbound request", async () => {

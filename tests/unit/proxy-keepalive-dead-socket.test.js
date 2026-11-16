@@ -194,25 +194,19 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     expect(fetchMock.mock.calls[0][1].dispatcher).toBe(freshDispatcher);
   });
 
-  it("BaseExecutor.execute sets forceFreshSocket=true when retrying after connect timeout or 502", async () => {
+  it("BaseExecutor.execute sets forceFreshSocket=true when retrying after network error or 502", async () => {
     const fetchMock = vi.fn();
     vi.doMock("../../open-sse/utils/proxyFetch.js", () => ({ proxyAwareFetch: (...args) => fetchMock(...args) }));
 
     const { BaseExecutor } = await import("../../open-sse/executors/base.js");
     const ex = new BaseExecutor("nvidia", {
       baseUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
-      timeoutMs: 15,
+      timeoutMs: 150,
       retry: { 502: { attempts: 2, delayMs: 0 } },
     });
 
     fetchMock
-      .mockImplementationOnce((_url, opts) => new Promise((_resolve, reject) => {
-        opts.signal.addEventListener("abort", () => {
-          const err = new Error("fetch connect timeout");
-          err.name = "AbortError";
-          reject(err);
-        });
-      }))
+      .mockRejectedValueOnce(new Error("socket hang up"))
       .mockResolvedValueOnce({ status: 200, headers: { get: () => "application/json" } });
 
     const out = await ex.execute({
