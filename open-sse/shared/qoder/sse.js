@@ -105,6 +105,10 @@ function parseInner(inner) {
 export function createQoderSseCoalescer({ model, encoder, sseDone }) {
   let pendingFinish = null;
   let pendingUsage = null;
+  // Qoder's gateway currently labels every chunk as model="auto", including
+  // requests whose live model_config.key is an explicit model. The selected
+  // key is the authoritative selector used by the worker runtime, so expose
+  // that key to OpenAI clients instead of the gateway's generic label.
   let lastMeta = { id: null, created: null, model };
   let doneEmitted = false;
   let finishAlreadyForwarded = false;
@@ -163,15 +167,15 @@ export function createQoderSseCoalescer({ model, encoder, sseDone }) {
 
     if (typeof parsed.id === "string" && parsed.id) lastMeta.id = parsed.id;
     if (typeof parsed.created === "number") lastMeta.created = parsed.created;
-    if (typeof parsed.model === "string" && parsed.model) lastMeta.model = parsed.model;
 
     const usage = canonicalizeQoderUsage(parsed.usage);
     if (usage) pendingUsage = usage;
 
     const finish = finishReasonOf(parsed);
     if (hasValuableDelta(parsed)) {
-      // Stream content as-is (preserves upstream JSON for tests/clients).
-      emitRaw(controller, typeof inner === "string" ? inner : JSON.stringify(parsed));
+      // Preserve the upstream chunk except for its non-authoritative generic
+      // model label; callers need the explicit model selected by model_config.
+      emitJson(controller, { ...parsed, model });
       if (finish) {
         finishAlreadyForwarded = true;
         // Keep finish around only if we still need a usage trailer.

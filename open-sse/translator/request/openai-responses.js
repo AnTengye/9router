@@ -315,6 +315,18 @@ function buildReasoningInputItem(msg) {
   return item;
 }
 
+function mapResponsesText(result, body) {
+  if (body.text !== undefined) result.text = { ...body.text };
+  if (body.response_format && !result.text?.format) {
+    const { json_schema, ...format } = body.response_format;
+    result.text = {
+      ...result.text,
+      format: json_schema ? { ...format, ...json_schema } : format,
+    };
+  }
+  delete result.response_format;
+}
+
 /**
  * Convert OpenAI Chat Completions to OpenAI Responses API format
  */
@@ -328,6 +340,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
     }
     delete out.max_tokens;
     delete out.max_completion_tokens;
+    mapResponsesText(out, body);
     return out;
   }
 
@@ -458,6 +471,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   if (body.reasoning_effort !== undefined) result.reasoning = { effort: body.reasoning_effort, summary: "auto" };
   if (body.service_tier !== undefined) result.service_tier = body.service_tier;
   if (body.prompt_cache_key !== undefined) result.prompt_cache_key = body.prompt_cache_key;
+  mapResponsesText(result, body);
 
   return result;
 }

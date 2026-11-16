@@ -530,6 +530,9 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       try {
         return await fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket);
       } catch (proxyError) {
+        // An aborted caller/deadline cannot be recovered by switching routes;
+        // the direct attempt would reuse the same already-aborted signal.
+        if (options?.signal?.aborted) throw proxyError;
         if (proxyOptions?.strictProxy === true) {
           throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
         }
@@ -550,6 +553,9 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
     try {
       return await fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket);
     } catch (proxyError) {
+      // Do not label deadline/caller cancellation as a proxy failure and do not
+      // retry direct with the same already-aborted signal.
+      if (options?.signal?.aborted) throw proxyError;
       // If strictProxy is enabled, fail hard instead of falling back to direct
       if (proxyOptions?.strictProxy === true) {
         throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);

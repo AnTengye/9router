@@ -17,6 +17,8 @@ import { buildCosyHeaders } from "../../src/lib/qoder/cosy.js";
 import { QoderService } from "../../src/lib/oauth/services/qoder.js";
 import {
   QODER_CHAT_URL_ENCODED,
+  QODER_CLI_VERSION,
+  QODER_IDE_VERSION,
   QODER_MODEL_LIST_URL,
   QODER_MODEL_MAP,
 } from "../../src/lib/qoder/constants.js";
@@ -38,12 +40,32 @@ const initiateDeviceFlow = () => new QoderService().initiateDeviceFlow();
 const parseExpiry = QoderService.parseExpiry;
 
 describe("QODER_MODEL_MAP", () => {
-  it("allows Qoder's latest model key", () => {
+  it("allows Qoder's current model keys", () => {
     expect(QODER_MODEL_MAP.qmodel_latest).toBe("qmodel_latest");
+    expect(QODER_MODEL_MAP.smodel).toBe("smodel");
+    expect(QODER_MODEL_MAP.cmodel).toBe("cmodel");
+    expect(QODER_MODEL_MAP.kmodel_latest).toBe("kmodel_latest");
   });
 
-  it("exposes Qoder's latest model in the static provider catalog", () => {
+  it("exposes Qoder's current models in the static provider catalog", () => {
     expect(PROVIDER_MODELS.qd.some((model) => model.id === "qmodel_latest")).toBe(true);
+    expect(PROVIDER_MODELS.qd.some((model) => model.id === "smodel" && model.name === "Sonus")).toBe(true);
+    expect(PROVIDER_MODELS.qd.some((model) => model.id === "cmodel" && model.name === "Cantus")).toBe(true);
+  });
+
+  it("uses a client identity new enough for Sonus and Cantus", () => {
+    expect(QODER_IDE_VERSION).toBe("1.13.3");
+    expect(QODER_CLI_VERSION).toBe("1.1.49");
+  });
+});
+
+describe("resolveQoderModelKey", () => {
+  it("prefers the clean translated body model over a thinking-suffixed route", () => {
+    expect(qoderExecutorInternals.resolveQoderModelKey("dmodel(high)", { model: "dmodel" })).toBe("dmodel");
+  });
+
+  it("strips provider prefixes and thinking suffixes from the fallback", () => {
+    expect(qoderExecutorInternals.resolveQoderModelKey("qoder/dmodel(high)", {})).toBe("dmodel");
   });
 });
 
@@ -195,6 +217,11 @@ describe("buildCosyHeaders", () => {
   it("Cosy-Sigpath strips the leading /algo prefix", () => {
     const headers = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, creds);
     expect(headers["Cosy-Sigpath"]).toBe("/api/v2/model/list");
+  });
+
+  it("publishes the current IDE version in the signed headers", () => {
+    const headers = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, creds);
+    expect(headers["Cosy-Version"]).toBe(QODER_IDE_VERSION);
   });
 
   it("Cosy-Sigpath also handles the encoded chat URL", () => {
@@ -489,7 +516,11 @@ describe("wrapQoderSSE", () => {
     const upstream = `data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}\n\n`;
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/auto");
     const out = await drain(wrapped);
-    expect(out).toContain(`data: ${inner}\n\n`);
+    const [chunk] = parseForwardedChunks(out);
+    expect(chunk).toMatchObject({
+      model: "qoder/auto",
+      choices: [{ delta: { content: "hi" } }],
+    });
     expect(out).toContain("data: [DONE]\n\n");
   });
 
@@ -501,19 +532,22 @@ describe("wrapQoderSSE", () => {
     const upstream = `data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}`;
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/auto");
     const out = await drain(wrapped);
-    expect(out).toContain(`data: ${inner}\n\n`);
+    const [chunk] = parseForwardedChunks(out);
+    expect(chunk).toMatchObject({
+      model: "qoder/auto",
+      choices: [{ delta: { content: "tail" } }],
+    });
   });
 
   // Regression for review finding #3: chunks could leak past [DONE] when
-  // the success branch had no doneEmitted guard. We synthesize an error
-  // envelope after content (which sets doneEmitted=true), followed by a valid envelope
-  // and assert the second envelope is NOT forwarded.
+  // the success branch had no doneEmitted guard. We synthesize a terminal
+  // envelope followed by a valid envelope and assert the latter is dropped.
   it("does not forward chunks after [DONE] has been emitted", async () => {
-    const errorEnv = JSON.stringify({ statusCodeValue: 500, body: "boom" });
+    const doneEnv = JSON.stringify({ statusCodeValue: 200, body: "[DONE]" });
     const validInner = JSON.stringify({ choices: [{ delta: { content: "leak" } }] });
     const validEnv = JSON.stringify({ statusCodeValue: 200, body: validInner });
     const wrapped = await wrapQoderSSE(
-      makeResponse([envelope(JSON.stringify({ choices: [{ delta: { content: "hi" } }] })) + `data: ${errorEnv}\n\ndata: ${validEnv}\n\n`]),
+      makeResponse([`data: ${doneEnv}\n\ndata: ${validEnv}\n\n`]),
       "qoder/auto",
     );
     const out = await drain(wrapped);
@@ -539,13 +573,29 @@ describe("wrapQoderSSE", () => {
     expect(() => JSON.parse(dataLine.slice("data: ".length))).not.toThrow();
   });
 
-  it("upstream first-frame error envelope produces an HTTP error", async () => {
+  it("first-frame upstream error envelope becomes a real HTTP error", async () => {
     const env = JSON.stringify({ statusCodeValue: 503, body: "service unavailable" });
     const wrapped = await wrapQoderSSE(makeResponse([`data: ${env}\n\n`]), "qoder/lite");
     expect(wrapped.status).toBe(503);
-    expect(await wrapped.json()).toEqual({
-      error: { message: "service unavailable", code: 503 },
+    expect(await wrapped.json()).toMatchObject({
+      error: { type: "qoder_error" },
     });
+  });
+
+  it("late upstream errors remain structured SSE errors", async () => {
+    const content = JSON.stringify({ choices: [{ delta: { content: "partial" } }] });
+    const okEnv = JSON.stringify({ statusCodeValue: 200, body: content });
+    const errorEnv = JSON.stringify({
+      statusCodeValue: 416,
+      body: '{"error":{"code":406,"message":"","type":"intention_rejected"}}',
+    });
+    const wrapped = await wrapQoderSSE(
+      makeResponse([`data: ${okEnv}\n\ndata: ${errorEnv}\n\n`]),
+      "qoder/cmodel",
+    );
+    const chunks = parseForwardedChunks(await drain(wrapped));
+    expect(chunks[0].choices[0].delta.content).toBe("partial");
+    expect(chunks[1].error).toMatchObject({ code: 406, type: "intention_rejected" });
   });
 
   it("non-ok responses are returned unchanged (no transform)", async () => {
@@ -589,13 +639,14 @@ describe("wrapQoderSSE", () => {
     });
     const wrapped = await wrapQoderSSE(
       makeResponse([envelope(content) + envelope(finish) + envelope(usage) + envelope("[DONE]")]),
-      "qoder/auto",
+      "qoder/smodel",
     );
     const out = await drain(wrapped);
-    expect(out).toContain(`data: ${content}\n\n`);
     const chunks = parseForwardedChunks(out);
+    expect(chunks[0].model).toBe("qoder/smodel");
     const usageChunk = chunks.find((c) => c.usage);
     expect(usageChunk).toBeDefined();
+    expect(usageChunk.model).toBe("qoder/smodel");
     expect(usageChunk.choices[0].finish_reason).toBe("stop");
     expect(usageChunk.usage.prompt_tokens).toBe(100);
     expect(usageChunk.usage.completion_tokens).toBe(20);

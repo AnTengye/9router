@@ -217,14 +217,15 @@ describe("applyThinking per provider format", () => {
     ["gpt-5.6-terra", "max", "max"],
     ["gpt-5.6-terra", "ultra", "ultra"],
     ["gpt-5.6-luna", "max", "max"],
-    ["gpt-5.6-luna", "ultra", "max"],
+    ["gpt-5.6-luna", "ultra", "ultra"],
   ])("normalizes Codex %s effort %s to %s", (model, effort, expected) => {
     const out = apply("openai-responses", model, { reasoning: { effort } }, "codex");
-    expect(out.reasoning_effort).toBe(expected);
+    expect(out.reasoning.effort).toBe(expected);
+    expect(out.reasoning_effort).toBeUndefined();
   });
   it("applies a supported Codex Ultra suffix", () => {
     const out = apply("openai-responses", "gpt-5.6-sol(ultra)", {}, "codex");
-    expect(out.reasoning_effort).toBe("ultra");
+    expect(out.reasoning.effort).toBe("ultra");
   });
   it("keeps Codex-only GPT-5.6 levels out of Kiro translation", () => {
     const out = apply("openai", "gpt-5.6-sol", { reasoning_effort: "max" }, "kiro");
@@ -300,13 +301,15 @@ describe("OpenCode Free ids with no capabilities entry (#2690)", () => {
   it("keeps the client reasoning_effort for space-bunny-free", () => {
     for (const level of ["low", "medium", "high", "xhigh", "none"]) {
       expect(apply("openai", "oc/space-bunny-free", bunny(level), "oc").reasoning_effort).toBe(level);
-      expect(apply("openai-responses", "oc/space-bunny-free", bunny(level), "oc").reasoning_effort).toBe(level);
+      const responses = apply("openai-responses", "oc/space-bunny-free", bunny(level), "oc");
+      expect(responses.reasoning.effort).toBe(level);
+      expect(responses.reasoning_effort).toBeUndefined();
     }
   });
 
   it("clamps max to xhigh (openai format has no max)", () => {
     expect(apply("openai", "oc/space-bunny-free", bunny("max"), "oc").reasoning_effort).toBe("xhigh");
-    expect(apply("openai-responses", "oc/space-bunny-free", bunny("max"), "oc").reasoning_effort).toBe("xhigh");
+    expect(apply("openai-responses", "oc/space-bunny-free", bunny("max"), "oc").reasoning.effort).toBe("xhigh");
   });
 
   it("still strips it for a model that has no entry at all (control)", () => {

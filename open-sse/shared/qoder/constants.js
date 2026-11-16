@@ -138,8 +138,12 @@ export function qoderInferenceBase(credentials, region = QODER_REGION_INTL) {
 }
 
 // COSY header constants. These are not arbitrary — the upstream signature
-// validation matches them against the values used at signing time.
-export const QODER_IDE_VERSION = "1.0.0";
+// validation matches them against the values used at signing time. Qoder's
+// model-list endpoint filters models by this version; 1.13.3 is the minimum
+// IDE version published for Sonus/Cantus (verified against the live catalog).
+export const QODER_IDE_VERSION = "1.13.3";
+// Keep CLI identity aligned with the worker runtime used by the same catalog.
+export const QODER_CLI_VERSION = "1.1.49";
 export const QODER_CLIENT_TYPE = "5";
 export const QODER_DATA_POLICY = "disagree";
 export const QODER_LOGIN_VERSION = "v2";
@@ -156,6 +160,8 @@ export const QODER_MODEL_MAP = {
   efficient: "efficient",
   lite: "lite",
   // Frontier models
+  smodel: "smodel",
+  cmodel: "cmodel",
   qmodel: "qmodel",
   qfmodel: "qfmodel",
   qmodel_latest: "qmodel_latest",
@@ -164,14 +170,9 @@ export const QODER_MODEL_MAP = {
   dfmodel: "dfmodel",
   gmodel: "gmodel",
   gfmodel: "gfmodel",
+  kmodel_latest: "kmodel_latest",
   kmodel: "kmodel",
   mmodel: "mmodel",
-  // Frontier reasoning pair. Canonical keys are `smodel` / `cmodel`; the Qoder
-  // picker only shows the display names Sonus / Cantus. The per-account catalog
-  // frequently omits them even for entitled accounts — see
-  // QODER_STATIC_MODEL_CONFIGS below.
-  smodel: "smodel",
-  cmodel: "cmodel",
 };
 
 /**

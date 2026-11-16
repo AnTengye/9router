@@ -32,7 +32,11 @@ describe("Qoder first-frame errors", () => {
     expect(wrapped.ok).toBe(false);
     expect(wrapped.headers.get("content-type")).toBe("application/json");
     const body = await wrapped.json();
-    expect(body.error.message).toBe(duplicate);
+    expect(body.error).toMatchObject({
+      code: "103",
+      type: "qoder_error",
+      message: expect.stringContaining("Duplicate request"),
+    });
     expect(body).not.toHaveProperty("choices");
   });
 
@@ -47,7 +51,10 @@ describe("Qoder first-frame errors", () => {
     const { response } = upstream([frame(status, "upstream failure")]);
     const wrapped = await wrapQoderSSE(response, "qoder/auto");
     expect(wrapped.status).toBe(status);
-    expect((await wrapped.json()).error.message).toBe("upstream failure");
+    expect((await wrapped.json()).error).toMatchObject({
+      code: status,
+      message: expect.stringContaining("upstream failure"),
+    });
   });
 
   it.each([0, 302, 600, 403.5])("maps invalid error status %s to 502", async (status) => {
@@ -62,7 +69,13 @@ describe("Qoder first-frame errors", () => {
     const { response } = upstream([": keepalive\n\n", frame(200, first) + frame(200, second) + "data: [DONE]\n\n"]);
     const wrapped = await wrapQoderSSE(response, "qoder/auto");
     expect(wrapped.status).toBe(200);
-    expect(await wrapped.text()).toBe(`data: ${first}\n\ndata: ${second}\n\ndata: [DONE]\n\n`);
+    const events = (await wrapped.text()).trim().split("\n\n");
+    expect(events).toHaveLength(3);
+    expect(events.slice(0, 2).map((event) => JSON.parse(event.slice(6)))).toEqual([
+      { choices: [{ delta: { content: "hello" } }], model: "qoder/auto" },
+      { choices: [{ delta: { content: "world" } }], model: "qoder/auto" },
+    ]);
+    expect(events[2]).toBe("data: [DONE]");
   });
 
   it("starts forwarding success without waiting for the upstream to close", async () => {
@@ -72,7 +85,10 @@ describe("Qoder first-frame errors", () => {
     const reader = wrapped.body.getReader();
     try {
       const { value } = await reader.read();
-      expect(new TextDecoder().decode(value)).toBe(`data: ${inner}\n\n`);
+      expect(JSON.parse(new TextDecoder().decode(value).slice(6))).toEqual({
+        choices: [{ delta: { content: "hello" } }],
+        model: "qoder/auto",
+      });
     } finally {
       await reader.cancel();
     }

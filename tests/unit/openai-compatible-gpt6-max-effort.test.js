@@ -20,17 +20,18 @@ describe("OpenAI Compatible node keeps effort max for GPT-5.6 / GPT-6 (#5186)", 
     expect(out.reasoning_effort).toBe("max");
   });
 
-  it("level list offers max for the picker", () => {
+  it("level list offers max and ultra for the picker", () => {
     expect(getThinkingLevels(NODE, "gpt-6-astra")).toContain("max");
+    expect(getThinkingLevels(NODE, "gpt-6-astra")).toContain("ultra");
   });
 
-  it("older GPT models on a node keep the xhigh clamp", () => {
-    const out = applyThinking(FORMATS.OPENAI, "gpt-5", { reasoning_effort: "max" }, NODE);
-    expect(out.reasoning_effort).toBe("xhigh");
+  it("older GPT models on a node also support max and ultra", () => {
+    const out = applyThinking(FORMATS.OPENAI, "gpt-5", { reasoning_effort: "ultra" }, NODE);
+    expect(out.reasoning_effort).toBe("ultra");
   });
 
-  it("built-in openai provider is unchanged by this fix", () => {
-    const out = applyThinking(FORMATS.OPENAI, "gpt-5", { reasoning_effort: "max" }, "openai");
-    expect(out.reasoning_effort).toBe("xhigh");
+  it("built-in openai provider also supports max and ultra", () => {
+    const out = applyThinking(FORMATS.OPENAI, "gpt-5", { reasoning_effort: "ultra" }, "openai");
+    expect(out.reasoning_effort).toBe("ultra");
   });
 });

@@ -241,7 +241,7 @@ describe("wrapQoderSSE billing detection", () => {
     expect(wrapped.status).toBe(403);
   });
 
-  it("returns non-billing errors with their upstream HTTP status", async () => {
+  it("returns a real HTTP error for a first-frame non-billing failure", async () => {
     const errorEnv = JSON.stringify({
       statusCodeValue: 500,
       body: "Internal server error",
@@ -252,9 +252,28 @@ describe("wrapQoderSSE billing detection", () => {
 
     expect(wrapped.status).toBe(500);
     expect(wrapped.ok).toBe(false);
-    expect(await wrapped.json()).toEqual({
-      error: { message: "Internal server error", code: 500 },
+    const json = await wrapped.json();
+    expect(json.error.message).toContain("Internal server error");
+    expect(json.error.type).toBe("qoder_error");
+  });
+
+  it("preserves a structured intention rejection instead of returning fake content", async () => {
+    const errorEnv = JSON.stringify({
+      statusCodeValue: 416,
+      body: '{"error":{"code":406,"message":"","type":"intention_rejected"}}',
     });
+    const wrapped = await wrapQoderSSE(
+      makeResponse([`data: ${errorEnv}\n\n`]),
+      "qoder/cmodel",
+    );
+
+    expect(wrapped.status).toBe(416);
+    const json = await wrapped.json();
+    expect(json.error).toMatchObject({
+      code: 406,
+      type: "intention_rejected",
+    });
+    expect(json.error.message).toContain("intention_rejected");
   });
 
   it("passes through successful responses unchanged", async () => {
@@ -277,7 +296,8 @@ describe("wrapQoderSSE billing detection", () => {
     }
     buf += decoder.decode();
 
-    expect(buf).toContain(`data: ${inner}`);
+    expect(buf).toContain('"model":"qoder/ultimate"');
+    expect(buf).toContain('"content":"hello"');
     expect(buf).toContain("data: [DONE]");
   });
 });

@@ -28,6 +28,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { buildCosyHeaders } from "../shared/qoder/cosy.js";
 import {
   QODER_IDE_VERSION,
+  QODER_CLI_VERSION,
   QODER_CLIENT_TYPE,
   qoderRegionOf,
   qoderJobTokenExchangeUrl,
@@ -76,7 +77,7 @@ async function exchangeJobToken(pat, proxyOptions = null, signal = null, region 
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        "User-Agent": "qodercli/1.0.0",
+        "User-Agent": `qodercli/${QODER_CLI_VERSION}`,
         "Cosy-Version": QODER_IDE_VERSION,
         "Cosy-ClientType": QODER_CLIENT_TYPE,
       },
@@ -115,7 +116,7 @@ async function fetchUserIdForJobToken(jobToken, proxyOptions = null, signal = nu
         headers: {
           Authorization: `Bearer ${jobToken}`,
           Accept: "application/json",
-          "User-Agent": "qodercli/1.0.0",
+          "User-Agent": `qodercli/${QODER_CLI_VERSION}`,
         },
         signal,
       },

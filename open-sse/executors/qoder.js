@@ -30,12 +30,14 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
 import { FETCH_CONNECT_TIMEOUT_MS, HTTP_STATUS } from "../config/runtimeConfig.js";
 import {
+  QODER_CLI_VERSION,
   QODER_CHAT_SIG_PATH,
   QODER_CONTEXT_TIER_ENV,
   getQoderStaticModelConfig,
   qoderInferenceBase,
 } from "../shared/qoder/constants.js";
 import { getQoderModelConfig, resolveQoderModels, isQoderPat, resolveQoderCredentials } from "../services/qoderModels.js";
+import { extractThinking, stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { OPENAI_BLOCK, CLAUDE_BLOCK } from "../translator/schema/blocks.js";
 import { encodeDataUri } from "../translator/concerns/image.js";
 import { buildCosyHeaders, deriveMachineId } from "../shared/qoder/cosy.js";
@@ -185,7 +187,7 @@ function stableHash(prefix, ...parts) {
   return h.digest("hex").slice(0, 16);
 }
 
-function stableChatRecordId(model, messages, tools, maxTokens) {
+function stableChatRecordId(model, messages, tools, maxTokens, thinking) {
   const h = createHash("sha256");
   h.update("qoder-record\0");
   h.update(String(model));
@@ -206,6 +208,7 @@ function stableChatRecordId(model, messages, tools, maxTokens) {
     try { h.update(JSON.stringify(tools)); } catch {}
   }
   h.update(`\0mt=${maxTokens}`);
+  if (thinking) h.update(`\0thinking=${JSON.stringify(thinking)}`);
   return h.digest("hex").slice(0, 16);
 }
 
@@ -239,8 +242,19 @@ function truncate(s, n) {
 /**
  * Map the OpenAI-style request body into the exact shape Qoder expects.
  */
+function resolveQoderModelKey(model, body) {
+  // chatCore strips the generic "model(level)" marker from body.model before
+  // dispatch, while the executor argument intentionally retains the original
+  // model for logging/account locks. Prefer the clean request-body model and
+  // defensively strip a suffix from the fallback as well.
+  const candidate = typeof body?.model === "string" && body.model.trim()
+    ? body.model
+    : model;
+  return stripThinkingSuffix(String(candidate || "").replace(/^qoder(?:-cn)?\//, ""));
+}
+
 async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, uploadFn = null, region = "intl" }) {
-  const qoderKey = String(model || "").replace(/^qoder\//, "");
+  const qoderKey = resolveQoderModelKey(model, body);
 
   // Fetch model config from dynamic API instead of relying on static QODER_MODEL_MAP.
   // This allows support for new Qoder models (e.g., qmodel_latest) without code changes.
@@ -292,7 +306,7 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
 
   const { messages, systemText } = normalizeMessages(incoming);
   const tools = body.tools;
-  const isReasoning = !!modelConfig.is_reasoning;
+  let isReasoning = !!modelConfig.is_reasoning;
   const maxOutputTokens = Number(modelConfig.max_output_tokens) || 0;
 
   let maxTokens = 32_768;
@@ -304,10 +318,34 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
     maxTokens = body.max_completion_tokens;
   }
 
+  const parameters = { max_tokens: maxTokens };
+  const thinking = extractThinking(body);
+  if (thinking) {
+    const config = modelConfig.thinking_config;
+    isReasoning = thinking.mode !== "none";
+    if (!isReasoning) {
+      if (config?.disabled == null) {
+        throw new Error(`qoder: model "${qoderKey}" cannot disable thinking according to its live thinking_config`);
+      }
+      parameters.reasoning_effort = "none";
+      parameters.max_thinking_tokens = 0;
+    } else if (thinking.mode === "level") {
+      const efforts = config?.enabled?.efforts;
+      if (efforts && !Object.hasOwn(efforts, thinking.level)) {
+        throw new Error(`qoder: unsupported reasoning effort "${thinking.level}" for model "${qoderKey}"`);
+      }
+      parameters.reasoning_effort = thinking.level;
+    } else if (thinking.mode === "budget") {
+      parameters.max_thinking_tokens = thinking.budget;
+    }
+    // Keep both protocol flags in sync without changing the cached catalog.
+    modelConfig = { ...modelConfig, is_reasoning: isReasoning };
+  }
+
   const lastUser = lastUserText(messages);
   const psd = credentials.providerSpecificData || {};
   const sessionId = stableHash("qoder-session", psd.userId, qoderKey);
-  const recordId = stableChatRecordId(qoderKey, messages, tools, maxTokens);
+  const recordId = stableChatRecordId(qoderKey, messages, tools, maxTokens, thinking);
 
   // Context-window tier (200K/400K/1M): the IDE picks one from model_config.context_config;
   // qodercli-style requests default to the smallest. Escalate when the prompt no longer fits.
@@ -346,7 +384,7 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
       system: systemText,
       messages,
       tools: Array.isArray(tools) ? tools : [],
-      parameters: { max_tokens: maxTokens },
+      parameters,
       chat_context: {
         chatPrompt: "",
         imageUrls: null,
@@ -361,7 +399,7 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
       model_config: modelConfig,
       business: {
         product: "cli",
-        version: "1.0.0",
+        version: QODER_CLI_VERSION,
         type: "agent",
         stage: "start",
         id: uuidv4(),
@@ -400,6 +438,38 @@ function isBillingBlock(inner) {
   } catch { /* not JSON — fall through to legacy shape match */ }
   // Match legacy exact shape: {"code":"112",...}.
   return /"code"\s*:\s*"112"/.test(inner);
+}
+
+function qoderErrorDetails(inner, statusVal) {
+  let upstream = null;
+  if (typeof inner === "string" && inner) {
+    try { upstream = JSON.parse(inner); } catch { /* plain-text upstream error */ }
+  } else if (inner && typeof inner === "object") {
+    upstream = inner;
+  }
+  const detail = upstream?.error && typeof upstream.error === "object"
+    ? upstream.error
+    : upstream;
+  const upstreamCode = detail?.code ?? statusVal;
+  const upstreamType = detail?.type || "qoder_error";
+  const rawMessage = typeof detail?.message === "string" ? detail.message.trim() : "";
+  const fallback = typeof inner === "string" && inner.trim() && !upstream
+    ? truncate(inner.trim(), 200)
+    : `${upstreamType} (code ${upstreamCode})`;
+  const description = rawMessage
+    ? `${rawMessage} (${upstreamType}, code ${upstreamCode})`
+    : fallback;
+  return {
+    message: `qoder upstream error ${statusVal}: ${description}`,
+    code: upstreamCode,
+    type: upstreamType,
+  };
+}
+
+function qoderHttpErrorStatus(statusVal) {
+  return Number.isInteger(statusVal) && statusVal >= 400 && statusVal <= 599
+    ? statusVal
+    : HTTP_STATUS.BAD_GATEWAY;
 }
 
 /**
@@ -441,7 +511,12 @@ async function peekFirstQoderFrame(reader, decoder) {
       : envelope?.body != null ? JSON.stringify(envelope.body) : "";
 
     if (statusVal !== 200) {
-      return { isError: true, isBilling: isBillingBlock(inner), statusVal, message: inner || `upstream status ${statusVal}` };
+      return {
+        isError: true,
+        isBilling: isBillingBlock(inner),
+        statusVal,
+        details: qoderErrorDetails(inner, statusVal),
+      };
     }
     return { isError: false, consumed, upstreamDone };
   }
@@ -480,14 +555,15 @@ async function wrapQoderSSE(response, model, log = null) {
 
   // Detect errors before returning a successful streaming response.
   const peek = await peekFirstQoderFrame(reader, decoder);
-  if (peek.isError) {
+  if (peek?.isError) {
+    // Qoder tunnels upstream HTTP failures inside an HTTP-200 SSE envelope.
+    // Surface the first-frame failure as a real JSON error so non-streaming
+    // clients cannot mistake it for assistant content. Billing remains 403 to
+    // preserve account fallback behavior.
     await reader.cancel().catch(() => {});
-    const status = peek.isBilling
-      ? HTTP_STATUS.FORBIDDEN
-      : Number.isInteger(peek.statusVal) && peek.statusVal >= HTTP_STATUS.BAD_REQUEST && peek.statusVal <= 599
-        ? peek.statusVal : HTTP_STATUS.BAD_GATEWAY;
+    const status = peek.isBilling ? HTTP_STATUS.FORBIDDEN : qoderHttpErrorStatus(peek.statusVal);
     return new Response(
-      JSON.stringify({ error: { message: peek.message, code: peek.statusVal } }),
+      JSON.stringify({ error: peek.details }),
       { status, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -524,38 +600,11 @@ async function wrapQoderSSE(response, model, log = null) {
       ? envelope.body
       : envelope.body != null ? JSON.stringify(envelope.body) : "";
     if (statusVal !== 200) {
-      // Always visible: error envelopes are rare and worth one stderr line at
-        // any log level (response bodies carry no credentials).
-      try {
-        console.error(`[QODER] error envelope status=${statusVal} statusType=${typeof envelope.statusCodeValue} bodyType=${typeof envelope.body} body=${truncate(inner, 300)}`);
-      } catch { /* logging must not break the stream */ }
-      if (isBillingBlock(inner)) {
-        // Billing/quota envelope at any stream position (peek only covers the
-        // first frame): emit a structured error chunk, not fake assistant text.
-        // parseSSEToOpenAIResponse understands chunk.error and turns it into a
-        // non-200 result so chat.js locks the model and falls back. Streaming
-        // clients receive a real SSE error instead of "[qoder error ...]" text.
-        const errObj = JSON.stringify({
-          error: {
-            message: inner || `qoder billing block (${statusVal})`,
-            code: "qoder_billing_block",
-            status: 403,
-            type: "quota_error",
-          },
-        });
-        controller.enqueue(encoder.encode(`data: ${errObj}\n\n`));
-        controller.enqueue(encoder.encode(SSE_DONE));
-        doneEmitted = true;
-        return;
-      }
-      const msg = inner || `upstream status ${statusVal}`;
-      const errChunk = JSON.stringify({
-        id: `qoder-error-${Date.now()}`,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{ index: 0, delta: { content: `\n[qoder error ${statusVal}: ${truncate(msg, 200)}]` }, finish_reason: "stop" }],
-      });
+      const details = qoderErrorDetails(inner, statusVal);
+      const error = isBillingBlock(inner)
+        ? { ...details, code: "qoder_billing_block", status: HTTP_STATUS.FORBIDDEN, type: "quota_error" }
+        : { ...details, status: qoderHttpErrorStatus(statusVal) };
+      const errChunk = JSON.stringify({ error });
       controller.enqueue(encoder.encode(`data: ${errChunk}\n\n`));
       controller.enqueue(encoder.encode(SSE_DONE));
       doneEmitted = true;
@@ -1060,5 +1109,6 @@ export const __test__ = {
   normalizeMessages,
   wrapQoderSSE,
   buildQoderRequestBody,
+  resolveQoderModelKey,
   isBillingBlock,
 };

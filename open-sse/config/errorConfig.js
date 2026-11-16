@@ -38,6 +38,10 @@ export const BACKOFF_CONFIG = {
 // Default cooldown for transient/unknown errors
 export const TRANSIENT_COOLDOWN_MS = 30 * 1000;
 
+// Gateway-local timeout marker. This failure is caused by the router's own
+// response-header deadline, so it must not poison provider account health.
+export const UPSTREAM_HEADERS_TIMEOUT_CODE = "UPSTREAM_HEADERS_TIMEOUT";
+
 // Hard cap for provider-reported rate limit cooldown (e.g. codex resets_at can be 5-6h)
 export const MAX_RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000;
 

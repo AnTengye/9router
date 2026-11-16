@@ -59,6 +59,31 @@ describe("BaseExecutor.execute — baseUrls fallback", () => {
 });
 
 describe("BaseExecutor.execute — network error retry/fallback", () => {
+  it("does not retry the router's own response-header timeout", async () => {
+    const ex = makeExec({
+      baseUrl: "https://x/api",
+      timeoutMs: 5,
+      retry: { 502: { attempts: 3, delayMs: 0 } },
+    });
+    fetchMock.mockImplementationOnce(async (_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    }));
+
+    let thrown = null;
+    try {
+      await ex.execute({ model: "m", body: {}, stream: false, credentials: creds });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: "UpstreamHeadersTimeoutError",
+      code: "UPSTREAM_HEADERS_TIMEOUT",
+      status: 504,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("maps network exception to 502 retry config", async () => {
     const ex = makeExec({ baseUrl: "https://x/api", retry: { 502: { attempts: 1, delayMs: 0 } } });
     fetchMock

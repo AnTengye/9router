@@ -5,10 +5,10 @@ describe("getThinkingLevels", () => {
   it.each([
     ["gpt-5.6-sol", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
     ["gpt-5.6-terra", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
-    ["gpt-5.6-luna", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+    ["gpt-5.6-luna", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
     ["gpt-5.6-sol-review", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
     ["gpt-5.6-terra-review", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
-    ["gpt-5.6-luna-review", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+    ["gpt-5.6-luna-review", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]],
   ])("returns Codex levels for %s", (model, expected) => {
     expect(getThinkingLevels("codex", model)).toEqual(expected);
   });
@@ -19,13 +19,13 @@ describe("getThinkingLevels", () => {
     ]);
   });
 
-  it("does not add max for other codex models", () => {
+  it("includes max and ultra for other codex models", () => {
     const levels = getThinkingLevels("codex", "gpt-5.3-codex");
-    expect(levels).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(levels).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
-  it("does not add max for other Codex models", () => {
+  it("includes max and ultra for all GPT models", () => {
     const levels = getThinkingLevels("codex", "gpt-daybreak-blue-latest");
-    expect(levels || []).not.toContain("max");
+    expect(levels || []).toContain("ultra");
   });
 });

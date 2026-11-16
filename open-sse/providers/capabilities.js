@@ -333,6 +333,9 @@ export const PROVIDER_CAPABILITIES = {
     "gpt-5.6-terra-review":      CODEX_GPT_56_DEFAULT_CAPS,
     "gpt-5.6-luna":              CODEX_GPT_56_DEFAULT_CAPS,
     "gpt-5.6-luna-review":       CODEX_GPT_56_DEFAULT_CAPS,
+    "gpt-daybreak-blue-latest":  CODEX_GPT_56_DEFAULT_CAPS,
+    "gpt-reserve":               CODEX_GPT_56_DEFAULT_CAPS,
+    "codex-auto-review":         CODEX_GPT_56_DEFAULT_CAPS,
   },
   "kiro": {
     "gpt-5.6-sol": KIRO_GPT_5_6_CAPABILITIES,
@@ -402,6 +405,40 @@ export const PROVIDER_CAPABILITIES = {
     // published efforts from low/high/xhigh to low/high/max.
     "deepseek-v4.1-flash": { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: true, contextWindow: 1000000, maxOutput: 393216 },
   },
+  // Qoder — upstream exposes opaque internal ids (dfmodel, kmodel, …); the
+  // registry `name` is display-only and capability lookup matches on the raw
+  // id, so every qoder model would fall through to DEFAULT_CAPABILITIES
+  // (200K) without this map. contextWindow follows the real model family's
+  // spec: the /algo/api/v2/model/list max_input_tokens under-reports some
+  // windows (GLM-5.3 / Kimi-K3 / Qwen3.8-Max claim 180K but accept more).
+  // max_output_tokens arrives as 0 for every model, so outputs are
+  // best-guess from the real model family. Vision tags below follow the
+  // upstream is_vl flag. The executor uploads inlined images to
+  // /api/v2/image/upload and leaves image_urls/chat_context.imageUrls null
+  // (same as qodercli). thinkingFormat keeps the true-model family for UI;
+  // the registry selects Qoder's own wire mapping. Switchability and effort
+  // options below mirror thinking_config in the live 2026-10-22 catalog.
+  // The executor revalidates against the current account's catalog at dispatch.
+  "qoder": {
+    "auto":           { contextWindow: 200000, maxOutput: 32768 },
+    "efficient":      { contextWindow: 200000, maxOutput: 32768 },
+    "lite":           { contextWindow: 200000, maxOutput: 32768 },
+    "ultimate":       { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: true, thinkingLevels: ["none", "low", "medium", "high", "xhigh", "max"], contextWindow: 1000000, maxOutput: 128000 }, // Claude Opus 5
+    "performance":    { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 }, // Claude Sonnet 5
+    "smodel":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, thinkingLevels: ["low", "medium", "high", "xhigh", "max"], contextWindow: 1000000, maxOutput: 128000 }, // Sonus; default 200K/high, tiers to 1M
+    "cmodel":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, thinkingLevels: ["low", "medium", "high", "xhigh", "max"], contextWindow: 1000000, maxOutput: 128000 }, // Cantus; default 200K/high, tiers to 1M
+    "dmodel":         { reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: true, thinkingLevels: ["none", "high", "max"], contextWindow: 1000000, maxOutput: 65536 },  // DeepSeek-V4-Pro
+    "dfmodel":        { reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: true, thinkingLevels: ["none", "low", "high", "max"], contextWindow: 1000000, maxOutput: 65536 },  // DeepSeek-Flash
+    "gmodel":         { reasoning: true, thinkingFormat: "zai", thinkingCanDisable: false, thinkingLevels: ["low", "high", "max"], contextWindow: 1000000, maxOutput: 128000 },      // GLM-5.3
+    "gfmodel":        { vision: true, reasoning: true, thinkingFormat: "zai", thinkingCanDisable: false, thinkingLevels: ["high", "max"], contextWindow: 1000000, maxOutput: 128000 }, // GLM-5.3-Flash
+    "kmodel_latest":  { vision: true, reasoning: true, thinkingFormat: "kimi", thinkingCanDisable: false, thinkingLevels: ["low", "high", "max"], contextWindow: 1000000, maxOutput: 65536 },      // Kimi-K3
+    "kmodel":         { vision: true, reasoning: true, thinkingFormat: "kimi", thinkingCanDisable: false, thinkingLevels: ["low", "high", "max"], contextWindow: 256000, maxOutput: 65536 },  // Kimi-K2.8-Preview
+    "mmodel":         { vision: true, reasoning: true, thinkingFormat: "minimax", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 512000 }, // MiniMax-M3
+    "qmodel_latest":  { vision: true, reasoning: true, thinkingFormat: "qwen", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 65536 },  // Qwen3.7-Max
+    "qmodel":         { vision: true, reasoning: true, thinkingFormat: "qwen", thinkingCanDisable: true, thinkingLevels: ["none", "auto"], contextWindow: 1000000, maxOutput: 65536 },  // Qwen3.7-Plus
+    "qfmodel":        { vision: true, reasoning: true, thinkingFormat: "qwen", thinkingCanDisable: true, thinkingLevels: ["none", "low", "medium", "xhigh"], contextWindow: 1000000, maxOutput: 65536 },  // Qwen3.8-Flash
+    "qmodel_38max":   { vision: true, reasoning: true, thinkingFormat: "qwen", thinkingCanDisable: true, thinkingLevels: ["none", "low", "medium", "xhigh"], contextWindow: 1000000, maxOutput: 65536 },      // Qwen3.8-Max
+  },
   // Poolside Laguna — OpenAI-compatible, all reasoning-capable (32K max output).
   "poolside": {
     "laguna-s-2.1":  { reasoning: true, thinkingFormat: "openai", contextWindow: 1000000, maxOutput: 32000 },
@@ -440,40 +477,10 @@ export const PROVIDER_CAPABILITIES = {
   },
 };
 
-// Qoder model capability table. The model ids are opaque (`dmodel`, `kmodel`,
-// `qmodel_38max`), so the name heuristics in PATTERN_CAPABILITIES match none of
-// them — without this table every Qoder model is reported text-only and an
-// image sent by a client is replaced by a placeholder before it ever reaches
-// the model. Context/output limits mirror what /algo/api/v2/model/list reports.
-PROVIDER_CAPABILITIES["qoder"] = {
-  // Tier aliases resolve to a variable target upstream; keep them text-only and
-  // on the default window rather than guessing.
-  "auto":         { contextWindow: 200000, maxOutput: 32768 },
-  "efficient":    { contextWindow: 200000, maxOutput: 32768 },
-  "lite":         { contextWindow: 200000, maxOutput: 32768 },
-  // Concrete ids read images back, so they are vision-capable.
-  "ultimate":     { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "performance":  { vision: true, contextWindow: 200000, maxOutput: 65536 },
-  "qmodel_38max": { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "qmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
-  "qmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
-  "qfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "kmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
-  "kmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
-  "gmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "gfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "dmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "dfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
-  "mmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
-  // Frontier reasoning pair; absent from many per-account catalogs, so they are
-  // routed through a static model_config (see shared/qoder/constants.js).
-  "smodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
-  "cmodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
-};
-
 // Qoder CN serves the identical model catalog from the CN gateway, so it shares
 // the intl Qoder capability table verbatim (vision/reasoning/contextWindow).
 PROVIDER_CAPABILITIES["qoder-cn"] = PROVIDER_CAPABILITIES["qoder"];
+PROVIDER_CAPABILITIES.qd = PROVIDER_CAPABILITIES.qoder;
 PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex;
 PROVIDER_CAPABILITIES.dv = PROVIDER_CAPABILITIES["devin-cli"];
 PROVIDER_CAPABILITIES.devin = PROVIDER_CAPABILITIES["devin-cli"];

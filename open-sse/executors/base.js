@@ -1,4 +1,5 @@
 import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { UPSTREAM_HEADERS_TIMEOUT_CODE } from "../config/errorConfig.js";
 import { shouldRefreshCredentials } from "../services/oauthCredentialManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { dbg } from "../utils/debugLog.js";
@@ -178,9 +179,22 @@ export class BaseExecutor {
       } catch (error) {
         clearTimeout(connectTimer);
         lastError = error;
-        const isConnectTimeout = connectCtrl.signal.aborted && error.name === "AbortError";
+        const isConnectTimeout = connectCtrl.signal.aborted && signal?.aborted !== true;
         dbg("FETCH", `${this.provider.toUpperCase()} ✖ ${error.name}: ${error.message}${isConnectTimeout ? " (connect timeout)" : ""}`);
-        // Connect timeout is internal — convert to retryable network error, don't propagate AbortError
+        // The router's response-header deadline is not an account failure. Do
+        // not multiply a deterministic slow request through the generic 502
+        // retry loop; surface one account-neutral 504 to the caller instead.
+        if (isConnectTimeout) {
+          const timeoutError = new Error(
+            `${UPSTREAM_HEADERS_TIMEOUT_CODE}: upstream response headers timeout after ${timeoutMs}ms`,
+            { cause: error },
+          );
+          timeoutError.name = "UpstreamHeadersTimeoutError";
+          timeoutError.code = UPSTREAM_HEADERS_TIMEOUT_CODE;
+          timeoutError.status = HTTP_STATUS.GATEWAY_TIMEOUT;
+          throw timeoutError;
+        }
+        // Caller cancellation must remain a cancellation, not a retryable 502.
         if (error.name === "AbortError" && !isConnectTimeout) throw error;
 
         // Map network/fetch exceptions to 502 retry config; force a fresh socket on retry

@@ -14,7 +14,7 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
   it.each(["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"])("lists %s with Codex capabilities", (model) => {
     const entry = getModelsByProviderId("codex").find((item) => item.id === model);
     expect(entry?.responsesLite).toBe(true);
-    expect(entry?.thinkingLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(entry?.thinkingLevels).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(getCapabilitiesForModel("codex", model)).toMatchObject({
       vision: true,
       reasoning: true,
@@ -23,14 +23,14 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
       contextWindow: 272000,
       maxOutput: 128000,
     });
-    expect(getThinkingLevels("codex", model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(getThinkingLevels("codex", model)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(getThinkingLevels("codex", `${model}(high)`)).toEqual(entry.thinkingLevels);
   });
 
   it("lists gpt-6.1-terra as a Lite model with its 500k Codex window", () => {
     const entry = getModelsByProviderId("codex").find((item) => item.id === "gpt-6.1-terra");
     expect(entry?.responsesLite).toBe(true);
-    expect(entry?.thinkingLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(entry?.thinkingLevels).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(getCapabilitiesForModel("codex", "gpt-6.1-terra")).toMatchObject({
       vision: true,
       reasoning: true,
@@ -50,7 +50,7 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
     const headers = executor.buildHeaders(credentials, true, null, "gpt-6.1-terra");
 
     expect(headers["x-openai-internal-codex-responses-lite"]).toBe("true");
-    expect(body.reasoning).toEqual({ effort: "max", context: "all_turns" });
+    expect(body.reasoning).toEqual({ effort: "ultra", context: "all_turns" });
   });
 
   it("uses official OpenAI Standard pricing for GPT-6", () => {

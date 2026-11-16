@@ -6,12 +6,13 @@ import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { PROVIDERS } from "../../providers/index.js";
 import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel } from "./thinking.js";
+import { FORMATS } from "../formats.js";
 
-// Map a target wire-format to its native thinking format (when capability has none).
+// Map a target wire-format to its native thinking format.
 const FORMAT_TO_NATIVE = {
   openai: "openai",
-  "openai-responses": "openai",
-  "openai-response": "openai",
+  [FORMATS.OPENAI_RESPONSES]: FORMATS.OPENAI_RESPONSES,
+  [FORMATS.OPENAI_RESPONSE]: FORMATS.OPENAI_RESPONSES,
   codex: "openai",
   claude: "claude-budget",
   gemini: "gemini-budget",
@@ -141,6 +142,9 @@ function resolveFormat(targetFormat, model, provider) {
     ? PROVIDERS[provider]?.transports?.find((t) => t.format === targetFormat)?.thinkingFormat
     : null;
   if (transportFmt) return transportFmt;
+  // Responses nests reasoning options regardless of the model's Chat-style
+  // thinking capability. Reapplying that capability would undo translation.
+  if (FORMAT_TO_NATIVE[targetFormat] === FORMATS.OPENAI_RESPONSES) return FORMATS.OPENAI_RESPONSES;
   const providerFmt = provider ? PROVIDERS[provider]?.thinkingFormat : null;
   if (providerFmt) return providerFmt;
   const caps = getCapabilitiesForModel(provider, model);
@@ -270,6 +274,16 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display, model = "",
   const eff = none && !canDisable ? { mode: "level", level: "minimal" } : cfg;
 
   switch (fmt) {
+    case "qoder": {
+      // Qoder has its own effort vocabulary. Keep the intent intact; the
+      // executor validates it against this account's live thinking_config.
+      if (none) body.reasoning_effort = "none";
+      else if (cfg.mode === "level") body.reasoning_effort = cfg.level;
+      else body.thinking = cfg.mode === "budget"
+        ? { type: "enabled", budget_tokens: cfg.budget }
+        : { type: "enabled" };
+      break;
+    }
     case "openai": {
       if (none && canDisable) { body.reasoning_effort = "none"; break; }
       const level = toLevel(eff);
@@ -277,11 +291,14 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display, model = "",
       break;
     }
     case "openai-responses": {
-      // The Responses API nests effort: reasoning:{effort,summary}. A top-level
-      // reasoning_effort is rejected by strict upstreams (Meta: "unknown
-      // parameter `reasoning_effort`"). "none" is expressed by omitting reasoning.
-      if (none && canDisable) { delete body.reasoning; break; }
+      // Omitting reasoning uses the upstream default, so preserve an explicit
+      // request to disable it. "auto" instead leaves effort to the upstream.
+      if (none && canDisable) { body.reasoning = { effort: "none" }; break; }
       const level = toLevel(eff);
+      if (level === "auto") {
+        if (body.reasoning) delete body.reasoning.effort;
+        break;
+      }
       if (level) {
         const current = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
           ? body.reasoning
@@ -456,21 +473,26 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
   const { cleanModel, override } = parseSuffix(model);
   const cfg = override || intent || extractThinking(body);
   const caps = getCapabilitiesForModel(provider, cleanModel);
+  const fmt = resolveFormat(targetFormat, cleanModel, provider);
 
-  // Model cannot reason → strip any stray thinking fields.
-  if (!caps.reasoning) {
+  // Qoder also publishes new opaque model ids dynamically. Its executor has
+  // the live capability metadata, so a stale static table must not erase intent.
+  if (!caps.reasoning && fmt !== "qoder") {
     stripAll(body);
     return body;
   }
   if (!cfg) return body;
 
-  const fmt = resolveFormat(targetFormat, cleanModel, provider);
   const supportedLevels = getThinkingLevels(provider, cleanModel);
   // Anthropic's `display` (summarized | omitted) decides whether thinking text
   // comes back at all; keep what the client asked for instead of resetting it.
   // An OpenAI-shaped client's ask arrives via the captured intent instead.
   const display = typeof body.thinking?.display === "string" ? body.thinking.display : intent?.display;
+  const reasoning = fmt === FORMATS.OPENAI_RESPONSES ? body.reasoning : null;
   stripAll(body);
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    body.reasoning = { ...reasoning };
+  }
   applyFormat(fmt, body, cfg, caps, supportedLevels, display, cleanModel, isOpenAICompatibleNode(provider));
   return body;
 }
