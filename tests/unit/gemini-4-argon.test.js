@@ -6,7 +6,7 @@ import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.j
 import { getThinkingLevels } from "../../open-sse/providers/thinkingLevels.js";
 import { applyThinking, stripThinkingSuffix } from "../../open-sse/translator/concerns/thinkingUnified.js";
 
-describe("Gemini 4 Argon capabilities", () => {
+describe("Gemini 4 Argon & Carbon capabilities", () => {
   it.each(["gemini", "vertex", "antigravity"])("declares level-based always-on reasoning on %s", (provider) => {
     const model = provider === "antigravity" ? "gemini-4-argon-high" : "gemini-4-argon";
     const caps = getCapabilitiesForModel(provider, model);
@@ -16,6 +16,16 @@ describe("Gemini 4 Argon capabilities", () => {
     expect(caps.contextWindow).toBe(1048576);
     expect(caps.maxOutput).toBe(65536);
     expect(getThinkingLevels(provider, model)).toEqual(["low", "medium", "high"]);
+  });
+
+  it.each(["gemini", "vertex"])("declares level-based always-on reasoning for gemini-4-carbon on %s", (provider) => {
+    const caps = getCapabilitiesForModel(provider, "gemini-4-carbon");
+    expect(caps.reasoning).toBe(true);
+    expect(caps.thinkingFormat).toBe("gemini-level");
+    expect(caps.thinkingCanDisable).toBe(false);
+    expect(caps.contextWindow).toBe(1048576);
+    expect(caps.maxOutput).toBe(65536);
+    expect(getThinkingLevels(provider, "gemini-4-carbon")).toEqual(["low", "medium", "high"]);
   });
 });
 

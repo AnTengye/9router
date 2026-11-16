@@ -504,10 +504,11 @@ export async function POST(request) {
         case "vertex": {
           // Raw key: probe global endpoint (always 404 for unknown model, never 401)
           // SA JSON: attempt token mint via JWT assertion
-          const saJson = (() => { try { const p = JSON.parse(apiKey); return p.type === "service_account" ? p : null; } catch { return null; } })();
-          if (saJson) {
-            // Validate SA JSON has required fields
-            isValid = !!(saJson.client_email && saJson.private_key && saJson.project_id);
+          const parsed = (() => { try { return JSON.parse(apiKey); } catch { return null; } })();
+          if (parsed?.type === "service_account") {
+            isValid = !!(parsed.client_email && parsed.private_key && parsed.project_id);
+          } else if (parsed?.type === "authorized_user") {
+            isValid = !!(parsed.client_id && parsed.client_secret && parsed.refresh_token);
           } else {
             // Raw key: probe Vertex — 404 means key is valid (model just doesn't exist), 401 means invalid key
             const probeRes = await fetch(
@@ -520,9 +521,11 @@ export async function POST(request) {
         }
 
         case "vertex-partner": {
-          const saJson = (() => { try { const p = JSON.parse(apiKey); return p.type === "service_account" ? p : null; } catch { return null; } })();
-          if (saJson) {
-            isValid = !!(saJson.client_email && saJson.private_key && saJson.project_id);
+          const parsed = (() => { try { return JSON.parse(apiKey); } catch { return null; } })();
+          if (parsed?.type === "service_account") {
+            isValid = !!(parsed.client_email && parsed.private_key && parsed.project_id);
+          } else if (parsed?.type === "authorized_user") {
+            isValid = !!(parsed.client_id && parsed.client_secret && parsed.refresh_token);
           } else {
             const probeRes = await fetch(
               `https://aiplatform.googleapis.com/v1/publishers/google/models/__probe__:generateContent?key=${apiKey}`,

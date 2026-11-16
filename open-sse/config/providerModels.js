@@ -8,6 +8,8 @@ export { PROVIDER_MODELS };
 
 // OpenCode providers sharing the endpoint-family fallback for unknown model ids
 const isOpenCodeAlias = (aliasOrId) => !aliasOrId || ["oc", "opencode", "ocg", "opencode-go", "ocz", "opencode-zen"].includes(aliasOrId);
+const isVertexAlias = (aliasOrId) => ["vertex", "vx", "vertex-partner", "vxp"].includes(aliasOrId);
+const isVertexClaudeModel = (modelId) => typeof modelId === "string" && /^(?:anthropic\/)?claude-/i.test(modelId.trim());
 
 
 // Helper functions
@@ -57,6 +59,9 @@ export function findModelName(aliasOrId, modelId) {
 export function getModelTargetFormat(aliasOrId, modelId) {
   if (isOpenCodeAlias(aliasOrId) && isMuseSparkModel(modelId)) {
     return FORMATS.OPENAI_RESPONSES;
+  }
+  if (isVertexAlias(aliasOrId) && isVertexClaudeModel(modelId)) {
+    return FORMATS.CLAUDE;
   }
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;

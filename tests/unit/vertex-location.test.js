@@ -55,11 +55,13 @@ describe("Vertex API-key locations", () => {
     expect(executor.buildHeaders(credentials, false).Authorization).toBe("Bearer test-token");
   });
 
-  it("defaults OAuth/SA connections to the registry location for global-only models (Argon)", () => {
-    const url = new URL(new VertexExecutor().buildUrl("gemini-4-argon", false, 0, {
-      accessToken: "test-token", providerSpecificData: { projectId: "test-project" },
-    }));
-    expect(url.pathname).toContain("/locations/global/");
+  it("defaults OAuth/SA connections to the registry location for global-only models (Argon & Carbon)", () => {
+    for (const model of ["gemini-4-argon", "gemini-4-carbon"]) {
+      const url = new URL(new VertexExecutor().buildUrl(model, false, 0, {
+        accessToken: "test-token", providerSpecificData: { projectId: "test-project" },
+      }));
+      expect(url.pathname).toContain("/locations/global/");
+    }
   });
 
   it("preserves the partner endpoint", () => {

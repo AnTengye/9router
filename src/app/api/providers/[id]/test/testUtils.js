@@ -966,6 +966,25 @@ case "llm7": {
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key", refreshed: false };
       }
+      case "vertex":
+      case "vertex-partner": {
+        const parsed = (() => { try { return JSON.parse(connection.apiKey); } catch { return null; } })();
+        if (parsed?.type === "service_account") {
+          const valid = !!(parsed.client_email && parsed.private_key && parsed.project_id);
+          return { valid, error: valid ? null : "Invalid Service Account JSON" };
+        }
+        if (parsed?.type === "authorized_user") {
+          const valid = !!(parsed.client_id && parsed.client_secret && parsed.refresh_token);
+          return { valid, error: valid ? null : "Invalid ADC JSON" };
+        }
+        const probeRes = await fetchWithConnectionProxy(
+          `https://aiplatform.googleapis.com/v1/publishers/google/models/__probe__:generateContent?key=${connection.apiKey}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+          effectiveProxy,
+        );
+        const valid = probeRes.status !== 401 && probeRes.status !== 403;
+        return { valid, error: valid ? null : "Invalid Vertex API key" };
+      }
       default:
         return { valid: false, error: "Provider test not supported" };
     }

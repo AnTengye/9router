@@ -17,6 +17,8 @@ vi.mock("../../open-sse/utils/requestLogger.js", () => ({
     logClientRawRequest: vi.fn(),
     logRawRequest: vi.fn(),
     logTargetRequest: vi.fn(),
+    logProviderResponse: vi.fn(),
+    logConvertedResponse: vi.fn(),
     logError: vi.fn(),
   })),
 }));
@@ -88,10 +90,15 @@ vi.mock("../../open-sse/translator/concerns/prefetch.js", () => ({
   prefetchRemoteImages: vi.fn(async () => 0),
 }));
 
-vi.mock("../../open-sse/handlers/chatCore/requestDetail.js", () => ({
-  buildRequestDetail: vi.fn((detail) => detail),
-  extractRequestConfig: vi.fn((body, stream) => ({ body, stream })),
-}));
+vi.mock("../../open-sse/handlers/chatCore/requestDetail.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    buildRequestDetail: vi.fn((detail) => detail),
+    extractRequestConfig: vi.fn((body, stream) => ({ body, stream })),
+    saveUsageStats: vi.fn(),
+  };
+});
 
 vi.mock("../../open-sse/utils/error.js", () => ({
   createErrorResult: vi.fn((status, message) => ({ success: false, status, error: message })),
@@ -155,5 +162,82 @@ describe("forceStream provider config", { timeout: 20_000 }, () => {
 
     expect(executeMock).toHaveBeenCalledTimes(1);
     expect(executeMock.mock.calls[0][0].stream).toBe(true);
+  });
+
+  it("defaults omitted body.stream to false on OpenAI chat completions for non-forced providers (e.g. Immersive Translate)", async () => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+    const upstreamJson = {
+      id: "chatcmpl-test-611",
+      object: "chat.completion",
+      created: 1700000000,
+      model: "qwen3.8-flash",
+      choices: [{ index: 0, message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    };
+    executeMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify(upstreamJson), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      headers: {},
+      transformedBody: null,
+    });
+
+    const body = {
+      model: "ali-tp/qwen3.8-flash",
+      messages: [{ role: "user", content: "hello" }],
+    };
+    const result = await handleChatCore({
+      body,
+      modelInfo: { provider: "openai-compatible-chat-test", model: "qwen3.8-flash" },
+      credentials: { apiKey: "sk-test" },
+      clientRawRequest: {
+        endpoint: "/api/v1/chat/completions",
+        body,
+        headers: { accept: "*/*" },
+      },
+      connectionId: "test-connection",
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock.mock.calls[0][0].stream).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.response.headers.get("content-type")).toContain("application/json");
+    const rawText = await result.response.text();
+    expect(rawText).not.toContain("data: [DONE]");
+    expect(() => JSON.parse(rawText)).not.toThrow();
+    expect(JSON.parse(rawText).choices[0].message.content).toBe("你好");
+  });
+
+  it("returns valid JSON without trailing [DONE] when forced-stream provider answers with application/json for non-streaming client", async () => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+    const upstreamJson = {
+      id: "chatcmpl-forced-json",
+      object: "chat.completion",
+      created: 1700000000,
+      model: "gpt-4.1",
+      choices: [{ index: 0, message: { role: "assistant", content: "hello" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    };
+    executeMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify(upstreamJson), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      url: "https://api.openai.com/v1/chat/completions",
+      headers: {},
+      transformedBody: null,
+    });
+
+    const opts = makeOptions(undefined);
+    opts.clientRawRequest.headers = { accept: "*/*" };
+    const result = await handleChatCore(opts);
+
+    expect(result.success).toBe(true);
+    const rawText = await result.response.text();
+    expect(rawText).not.toContain("data: [DONE]");
+    expect(() => JSON.parse(rawText)).not.toThrow();
   });
 });

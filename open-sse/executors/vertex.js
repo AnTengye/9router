@@ -7,6 +7,25 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 // Cache project IDs resolved from raw API keys { apiKey → projectId }
 const projectIdCache = new Map();
 
+function isAnthropicVertexModel(model) {
+  return typeof model === "string" && /^(?:anthropic\/)?claude-/i.test(model.trim());
+}
+
+function cleanAnthropicModelId(model) {
+  return String(model || "")
+    .trim()
+    .replace(/^anthropic\//i, "")
+    .replace(/\([^()]+\)\s*$/, "")
+    .trim();
+}
+
+function stripCacheControlTtl(block) {
+  if (block && typeof block === "object" && block.cache_control?.ttl) {
+    const { ttl: _ttl, ...restCache } = block.cache_control;
+    block.cache_control = restCache;
+  }
+}
+
 /**
  * Parse Google ADC user credential JSON from apiKey string.
  * This is the format produced by `gcloud auth application-default login`.
@@ -33,12 +52,13 @@ function parseVertexAdcJson(apiKey) {
  * Resolve GCP project ID from a raw Vertex API key.
  * Sends a dummy 404 request and parses "projects/{id}" from the error message.
  */
-async function resolveProjectId(apiKey) {
+async function resolveProjectId(apiKey, proxyOptions = null) {
   if (projectIdCache.has(apiKey)) return projectIdCache.get(apiKey);
 
-  const res = await fetch(
+  const res = await proxyAwareFetch(
     `https://aiplatform.googleapis.com/v1/publishers/google/models/__probe__:generateContent?key=${apiKey}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    proxyOptions
   );
   const json = await res.json().catch(() => null);
   const msg = json?.[0]?.error?.message || json?.error?.message || "";
@@ -74,6 +94,24 @@ export class VertexExecutor extends BaseExecutor {
       adcJson?.quota_project_id ||
       credentials?.providerSpecificData?.projectId;
 
+    if (isAnthropicVertexModel(model)) {
+      if (!projectId) {
+        throw new Error("Vertex Anthropic Claude models require a project_id. Add it in providerSpecificData or use Service Account JSON.");
+      }
+      const location =
+        credentials?.providerSpecificData?.location ||
+        getModelMeta(this.provider, model)?.defaultLocation ||
+        "global";
+      const host =
+        location === "global"
+          ? "https://aiplatform.googleapis.com"
+          : `https://${location}-aiplatform.googleapis.com`;
+      const action = stream ? "streamRawPredict" : "rawPredict";
+      const cleanModel = cleanAnthropicModelId(model);
+      const url = `${host}/v1/projects/${projectId}/locations/${location}/publishers/anthropic/models/${cleanModel}:${action}`;
+      return rawKey ? `${url}?key=${rawKey}` : url;
+    }
+
     if (this.provider === "vertex-partner") {
       // Partner models require project_id in path regardless of auth method
       if (!projectId) throw new Error("Vertex partner models require a project_id. Add it in providerSpecificData or use Service Account JSON.");
@@ -101,16 +139,47 @@ export class VertexExecutor extends BaseExecutor {
       return url;
     }
 
-    // Raw API keys with an explicit project must honor its location (e.g. Argon on global).
+    // Raw API keys with an explicit project must honor its location (e.g. Argon/Carbon on global).
     // Keep the projectless endpoint for existing connections without a configured project.
     // ?alt=sse is required for proper SSE streaming (matches every other Gemini executor)
-    const location = credentials?.providerSpecificData?.location || "global";
+    const location =
+      credentials?.providerSpecificData?.location ||
+      getModelMeta(this.provider, model)?.defaultLocation ||
+      "global";
     let url = projectId
       ? `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:${action}`
       : `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:${action}`;
     if (stream) url += "?alt=sse";
     if (rawKey) url += stream ? `&key=${rawKey}` : `?key=${rawKey}`;
     return url;
+  }
+
+  transformRequest(model, body, stream, credentials) {
+    if (!isAnthropicVertexModel(model) || !body || typeof body !== "object") {
+      return body;
+    }
+    const { model: _model, stream: _stream, ...rest } = body;
+    if (Array.isArray(rest.system)) {
+      for (const b of rest.system) stripCacheControlTtl(b);
+    }
+    if (Array.isArray(rest.tools)) {
+      for (const t of rest.tools) stripCacheControlTtl(t);
+    }
+    if (Array.isArray(rest.messages)) {
+      for (const m of rest.messages) {
+        if (Array.isArray(m?.content)) {
+          for (const b of m.content) stripCacheControlTtl(b);
+        }
+      }
+    }
+    const payload = {
+      ...rest,
+      anthropic_version: "vertex-2023-10-16",
+    };
+    if (stream) {
+      payload.stream = true;
+    }
+    return payload;
   }
 
   buildHeaders(credentials, stream = true) {
@@ -159,9 +228,16 @@ export class VertexExecutor extends BaseExecutor {
       credentials.accessToken = result.accessToken;
     }
 
-    // vertex-partner with raw key: auto-resolve project_id if not provided
-    if (this.provider === "vertex-partner" && !saJson && !adcJson && !credentials?.providerSpecificData?.projectId) {
-      const projectId = await resolveProjectId(credentials.apiKey);
+    // Raw key on partner / Anthropic / global-only models (e.g. Gemini 4 Argon/Carbon):
+    // auto-resolve project_id if not provided, because the projectless Vertex endpoint
+    // routes to us-central1 where global-only models return 404.
+    const needsScopedProject =
+      this.provider === "vertex-partner" ||
+      isAnthropicVertexModel(model) ||
+      Boolean(getModelMeta(this.provider, model)?.defaultLocation) ||
+      /(?:^|\/)gemini-4(?:$|[-.])/i.test(String(model || ""));
+    if (needsScopedProject && !saJson && !adcJson && !credentials?.accessToken && !credentials?.providerSpecificData?.projectId) {
+      const projectId = await resolveProjectId(credentials.apiKey, proxyOptions);
       if (!projectId) throw new Error("Vertex: could not resolve project_id from API key. Please add it manually in provider settings.");
       log?.debug?.("VERTEX", `Resolved project_id: ${projectId}`);
       credentials.providerSpecificData = { ...credentials.providerSpecificData, projectId };

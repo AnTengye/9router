@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("proxyAwareFetch abort handling", () => {
-  const originalFetch = globalThis.fetch;
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.doUnmock("undici");
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -16,8 +14,11 @@ describe("proxyAwareFetch abort handling", () => {
       controller.abort(abortError);
       throw abortError;
     });
-    globalThis.fetch = fetchMock;
     vi.resetModules();
+    vi.doMock("undici", async (importOriginal) => {
+      const actual = await importOriginal();
+      return { ...actual, fetch: fetchMock };
+    });
     const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
 
     await expect(proxyAwareFetch(

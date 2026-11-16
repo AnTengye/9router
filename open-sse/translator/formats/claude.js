@@ -179,7 +179,14 @@ function isAdaptiveThinkingUnsupported(model = "") {
 }
 
 function handlesThinkingBlocks(provider) {
-  return provider === "claude" || provider?.startsWith("anthropic-compatible") || provider === "deepseek";
+  return (
+    provider === "claude" ||
+    provider === "vertex" ||
+    provider === "vertex-partner" ||
+    provider === "bedrock" ||
+    provider?.startsWith("anthropic-compatible") ||
+    provider === "deepseek"
+  );
 }
 
 function buildThinkingPlaceholder(provider, unsigned = false) {
@@ -636,7 +643,11 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
           // Every branch: a block with no visible thinking text goes — the upstream
           // Messages API rejects it outright (400 "each thinking block must contain
           // non-whitespace thinking"), and a valid signature does not save it.
-          const isClaudeNative = provider === "claude";
+          const isClaudeNative =
+            provider === "claude" ||
+            provider === "vertex" ||
+            provider === "vertex-partner" ||
+            provider === "bedrock";
           const kept = [];
           for (const block of msg.content) {
             const isThinking = block.type === CLAUDE_BLOCK.THINKING || block.type === CLAUDE_BLOCK.REDACTED_THINKING;
